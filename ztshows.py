@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+
 from pytvdbapi import api
 from tpb import TPB
 from tpb import CATEGORIES, ORDERS
@@ -53,9 +55,7 @@ def magnetDownload(link):
                 s.num_peers, state_str[s.state]),)
         sys.stdout.flush()
 
-        if not launched and s.progress >= 0.05 and s.state in [3, 4, 5]:
-            t = Thread(target=myfunc, args=(i,)).start()
-
+        if not launched and s.progress >= 0.075 and s.state in [3, 4, 5]:
             os.system('vlc "/tmp/' + h.name() + '"')
             launched = True
         time.sleep(1)
