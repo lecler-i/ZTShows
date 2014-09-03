@@ -18,35 +18,35 @@ from PyQt4.QtNetwork import QNetworkAccessManager, QNetworkRequest
 import libtorrent as lt
 import time
 import sys
+import json
 
 from threading import Thread
 
 tpb = TPB('https://thepiratebay.se')
 tvdb = api.TVDB('81DD35DB106172E7')
 
-SAVE_PATH = "/tmp/"
-
-PLAYER_PATH = "vlc {video} --sub-file={subtitles}"
-
 def launchPlayer(h):
-    os.system(PLAYER_PATH.format(video='"' + SAVE_PATH + h.name() + '"',subtitles=''))
+    config = json.load(open('config.json'))
+    os.system(config['PLAYER_PATH'].format(video='"' + config['SAVE_PATH'] + h.name() + '"',subtitles=''))
 
 def magnetDownload(link):
+    config = json.load(open('config.json'))
     ses = lt.session()
     ses.listen_on(6881, 6891)
 
     # info = lt.torrent_info(sys.argv[1])
     # h = ses.add_torrent({'ti': info, 'save_path': '/tmp/'})
 
-    h = lt.add_magnet_uri(ses, link, { 'save_path': SAVE_PATH })
+    h = lt.add_magnet_uri(ses, link, { 'save_path': config['SAVE_PATH'] })
     h.set_sequential_download(True)
-    # h.set_download_limit(750000)
+
+    if config['DOWNLOAD_SPEED_LIMIT'] > 0:
+        h.set_download_limit(config['DOWNLOAD_SPEED_LIMIT'] * 1000)
 
     print ('downloading metadata...')
     while (not h.has_metadata()): time.sleep(.5)
 
     print ('starting', h.name())
-    print ('episode will be launched when the download reach 10%')
 
     launched = False
     while (not h.is_seed()):
@@ -58,7 +58,7 @@ def magnetDownload(link):
                 s.num_peers, state_str[s.state]),)
         sys.stdout.flush()
 
-        if not launched and s.progress >= 0.075 and s.state in [3, 4, 5]:
+        if not launched and config['LAUNCH_VIDEO_PERCENT'] > 0 and s.progress >= config['LAUNCH_VIDEO_PERCENT'] / 100 and s.state in [3, 4, 5]:
             t = Thread(target=launchPlayer, args=(h,))
             t.daemon = True
             t.start()
@@ -72,8 +72,13 @@ class MainWindow(QtGui.QMainWindow):
     def __init__(self):
         super(MainWindow, self).__init__()
 
+        # TODO : see pickle module to dump object
+        self.settings = json.load(open('config.json'))
+
         self.initUI()
-        # self.setWindowIcon(QtGui.QIcon("icon.png"))
+
+    def saveSettings(self):
+        json.dump(self.settings, open('config.json', 'w'), indent=True)
 
     def initUI(self):
         self.initMenu()
@@ -107,15 +112,15 @@ class MainWindow(QtGui.QMainWindow):
     def initTabs(self):
         self.tabWidget = QtGui.QTabWidget(self)
 
-        self.searchSerieTab = self.searchSerieTab()
-        self.searchMovieTab = QtGui.QWidget()
-        self.downloadTab = QtGui.QWidget()
-        self.settingsTab = QtGui.QWidget()
+        searchSerieTab = self.searchSerieTab()
+        searchMovieTab = QtGui.QWidget()
+        downloadTab = QtGui.QWidget()
+        settingsTab = self.settingsTab()
 
-        self.tabWidget.addTab(self.searchSerieTab, "Search Serie")
-        self.tabWidget.addTab(self.searchMovieTab, "Search Movie")
-        self.tabWidget.addTab(self.downloadTab, "Downloads")
-        self.tabWidget.addTab(self.settingsTab, "Settings")
+        self.tabWidget.addTab(searchSerieTab, "Search Serie")
+        self.tabWidget.addTab(searchMovieTab, "Search Movie")
+        self.tabWidget.addTab(downloadTab, "Downloads")
+        self.tabWidget.addTab(settingsTab, "Settings")
 
 
     def searchSerieTab(self):
@@ -139,6 +144,61 @@ class MainWindow(QtGui.QMainWindow):
         vbox = QtGui.QVBoxLayout()
         vbox.addLayout(hbox)
         vbox.addWidget(searchResult)
+
+        widget = QtGui.QWidget()
+        widget.setLayout(vbox)
+
+        return widget
+
+
+    def settingsTab(self):
+
+        def textItemWidget(text, settingKey, dataType):
+            def update(value):
+                self.settings[settingKey] = dataType(value)
+                self.saveSettings()
+
+            labelField = QtGui.QLabel()
+            labelField.setText(text)
+            valueField = QtGui.QLineEdit()
+            if settingKey in self.settings:
+                valueField.setText(str(self.settings[settingKey]))
+            valueField.textChanged.connect(update)
+            hbox = QtGui.QHBoxLayout()
+            hbox.addWidget(labelField)
+            hbox.addWidget(valueField)
+            widget = QtGui.QWidget()
+            widget.setLayout(hbox)
+            return widget
+
+        def checkboxItemWidget(text, settingKey):
+            def update(value):
+                if value == QtCore.Qt.Checked:
+                    self.settings[settingKey] = True
+                else:
+                    self.settings[settingKey] = False
+                self.saveSettings()
+
+            labelField = QtGui.QLabel()
+            labelField.setText(text)
+            valueField = QtGui.QCheckBox()
+            if self.settings[settingKey] == True:
+                valueField.setCheckState(QtCore.Qt.Checked)
+            valueField.stateChanged.connect(update)
+            hbox = QtGui.QHBoxLayout()
+            hbox.addWidget(labelField)
+            hbox.addWidget(valueField)
+            widget = QtGui.QWidget()
+            widget.setLayout(hbox)
+            return widget
+
+        vbox = QtGui.QVBoxLayout()
+        vbox.addWidget(textItemWidget("Command line ({video}, {subtitles})", "PLAYER_PATH", str))
+        vbox.addWidget(textItemWidget("Save path", "SAVE_PATH", str))
+        vbox.addWidget(textItemWidget("Default subtitle language", "SUBTITLE_LANGUAGE", str))
+        vbox.addWidget(textItemWidget("ThePirateBay url", "TPB_URL", str))
+        vbox.addWidget(textItemWidget("Download speed limit (kB/s)", "DOWNLOAD_SPEED_LIMIT", int))
+        vbox.addWidget(textItemWidget("Launch video when download reach X % (0 to disable)", "LAUNCH_VIDEO_PERCENT", float))
 
         widget = QtGui.QWidget()
         widget.setLayout(vbox)
@@ -177,6 +237,8 @@ class SearchResult(QTreeView):
                     episodeRow.setData(episode)
                     seasonRow.appendRow(episodeRow)
             self.model.appendRow(showRow)
+        if len(shows) == 1:
+            self.expand(self.model.indexFromItem(showRow))
 
     def populateTorrents(self, idx):
         episode = idx.data(Qt.UserRole + 1)
@@ -193,7 +255,8 @@ class SearchResult(QTreeView):
         torrent = idx.data(Qt.UserRole + 1)
         if not hasattr(torrent, 'title'):
             return
-        magnetDownload(torrent.magnet_link)
+        Thread(target=magnetDownload, args=(torrent.magnet_link,)).start()
+#        magnetDownload(torrent.magnet_link)
 
 
 """"
