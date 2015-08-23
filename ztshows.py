@@ -367,7 +367,7 @@ class MainWindow(QMainWindow, Ui_MainWindow):
 
             value = self.instance.settings.get(key)
             if value is not None:
-                idx = node.findText(key)
+                idx = node.findText(value)
                 if idx > -1:
                     node.setCurrentIndex(idx)
             node.currentIndexChanged.connect(update)
