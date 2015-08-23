@@ -1,8 +1,0 @@
-{
- "SUBTITLE_LANGUAGE": "fre",
- "SAVE_PATH": "/tmp/",
- "PLAYER_PATH": "vlc {video} --sub-file={subtitles}",
- "TPB_URL": "http://thepiratebay.se",
- "LAUNCH_VIDEO_PERCENT": 5.0,
- "DOWNLOAD_SPEED_LIMIT": 0
-}

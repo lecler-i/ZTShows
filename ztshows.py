@@ -1,311 +1,306 @@
 #!/usr/bin/env python3
 
+import re
+import os
+import time
+import sys
+import yaml
+import uuid
+
+from PyQt4.QtGui import *
+from PyQt4.QtCore import *
+from ui.mainWindow import Ui_MainWindow
+
+import libtorrent as lt
 from pytvdbapi import api
 from tpb import TPB
 from tpb import CATEGORIES, ORDERS
 
-import re
-import os
-
-from PyQt4.QtGui import *
-from PyQt4.QtCore import *
-
-from PyQt4 import QtCore, QtGui
-
-from PyQt4.QtCore import QUrl
-from PyQt4.QtNetwork import QNetworkAccessManager, QNetworkRequest
-
-import libtorrent as lt
-import time
-import sys
-import json
-
 from threading import Thread
+from libs.progress import Progress
 
-tpb = TPB('https://thepiratebay.se')
-tvdb = api.TVDB('81DD35DB106172E7')
+class ZTorrent:
+    def __init__(self, handler):
+        self.handler = handler
+        self.data = {}
+    def update(self, **kwargs):
+        for key, value in kwargs.items():
+            self.data[key] = value
+    def get(self, key):
+        return self.data[key]
 
-def launchPlayer(h):
-    config = json.load(open('config.json'))
-    os.system(config['PLAYER_PATH'].format(video='"' + config['SAVE_PATH'] + h.name() + '"',subtitles=''))
-
-def magnetDownload(link):
-    config = json.load(open('config.json'))
-    ses = lt.session()
-    ses.listen_on(6881, 6891)
-
-    # info = lt.torrent_info(sys.argv[1])
-    # h = ses.add_torrent({'ti': info, 'save_path': '/tmp/'})
-
-    h = lt.add_magnet_uri(ses, link, { 'save_path': config['SAVE_PATH'] })
-    h.set_sequential_download(True)
-
-    if config['DOWNLOAD_SPEED_LIMIT'] > 0:
-        h.set_download_limit(config['DOWNLOAD_SPEED_LIMIT'] * 1000)
-
-    print ('downloading metadata...')
-    while (not h.has_metadata()): time.sleep(.5)
-
-    print ('starting', h.name())
-
-    launched = False
-    while (not h.is_seed()):
-        s = h.status()
-        state_str = ['queued', 'checking', 'downloading metadata', \
+class DownloadManager:
+    lt_states_str = ['queued', 'checking', 'downloading metadata', \
                      'downloading', 'finished', 'seeding', 'allocating', 'checking fastresume']
-        print ('\r%.2f%% complete (down: %.1f kB/s up: %.1f kB/s peers: %d) %s' % \
-               (s.progress * 100, s.download_rate / 1000, s.upload_rate / 1000, \
-                s.num_peers, state_str[s.state]),)
-        sys.stdout.flush()
+    def __init__(self, instance):
+        self.instance = instance
+        self.session = lt.session()
+        self.session.listen_on(6881, 6891)
+        self.torrents = {}
 
-        if not launched and config['LAUNCH_VIDEO_PERCENT'] > 0 and s.progress >= config['LAUNCH_VIDEO_PERCENT'] / 100 and s.state in [3, 4, 5]:
-            t = Thread(target=launchPlayer, args=(h,))
-            t.daemon = True
-            t.start()
-            launched = True
-        time.sleep(1)
+    def add_magnet(self, magnet, completion_callback = None, play_callback = None):
+        uid = uuid.uuid4().hex
+        self.torrents[uid] = ZTorrent(lt.add_magnet_uri(self.session, magnet, {'save_path': self.instance.settings.get('save_path')}))
+        self.torrents[uid].handler.set_sequential_download(True)
+        download_speed_limit = self.instance.settings.get('download_speed_limit')
+        if download_speed_limit is not None and download_speed_limit > 0:
+            self.torrents[uid].handler.set_download_limit(download_speed_limit * 1000)
+        Thread(target=self.download_worker, args=(self.torrents[uid], completion_callback, play_callback,)).start()
+        return self.torrents[uid]
 
-    print (h.name(), 'complete')
+    def download_worker(self, torrent, completion_callback = None, play_callback = None):
+        while (not torrent.handler.has_metadata()):
+            time.sleep(.1)
+        info = torrent.handler.get_torrent_info()
+        eta = Progress(info.total_size())
+        launch_at = self.instance.settings.get('launch_video_percent')
+        launched = False
+        while (not torrent.handler.is_seed()):
+            eta.increment()
+            status = torrent.handler.status()
+            torrent.update(
+                progress=status.progress * 100,
+                download_rate=status.download_rate / 1000,
+                upload_rate=status.upload_rate / 1000,
+                num_peers=status.num_peers,
+                state=self.lt_states_str[status.state],
+                eta=str(eta.time_remaining())
+            )
+            if (not launched and launch_at > 0 and
+                status.progress >= launch_at / 100 and
+                status.state in [3, 4, 5]):
+                if play_callback:
+                    play_callback()
+                launched = True
+            time.sleep(1)
+        torrent.update(progress=100)
 
+class Settings:
+    class SettingsException(Exception):
+        pass
+    def __init__(self, path = None):
+        if path is None:
+            print('[WARNING] Settings: path is not set, the configuration will not be saved')
+        self.path = path;
+        self.store = None
+    def load(self):
+        self.store = yaml.load(open(self.path))
+    def save(self):
+        yaml.dump(self.store, open(self.path, 'w'), default_flow_style=False)
+    def get(self, key):
+        if self.store is None:
+            self.store = {}
+        return self.store[key]
+    def set(self, key, value):
+        if self.store is None:
+            self.store = {}
+        self.store[key] = value
 
-class MainWindow(QtGui.QMainWindow):
+class ZTShows:
     def __init__(self):
+        self.settings = Settings('config.yml')
+        self.download_manager = DownloadManager(self)
+
+        tpb_base_url = self.settings.get('tpb_base_url')
+        self.api_tpb = TPB('https://thepiratebay.se' if not tpb_base_url else tpb_base_url)
+        tvdb_api_key = self.settings.get('tvdb_api_key')
+        self.api_tvdb = TVDB('81DD35DB106172E7' if not tvdb_api_key else tvdb_api_key)
+
+    def load(self):
+        self.settings.load()
+
+    def unload(self):
+        self.settings.save()
+
+    def search(self, query, callback):
+        def work(callback):
+            callback(self.api_tvdb.search(query, 'en'))
+        Thread(target=work, args=(callback,)).start()
+
+    def search_episode(self, episode, callback):
+        def work(callback):
+            results = self.api_tpb.search(query).order(ORDERS.SEEDERS.DES)
+            callback(results)
+        query = '{} s{:02d}e{:02d}'.format(episode.season.show.SeriesName,
+                                           episode.season.season_number,
+                                           episode.EpisodeNumber)
+        Thread(target=work, args=(callback,)).start()
+
+    def download(self, torrent):
+        t = self.download_manager.add_magnet(torrent.magnet_link)
+        while (True):
+            time.sleep(1)
+            print(t.data)
+
+    def open_player(h):
+        def work(player_path):
+            os.system(player_path)
+        player_path = self.settings.get('player_path').format(video='"' + self.settings.get('save_path') + torrent.name() + '"', subtitles='')
+        t = Thread(target=work, args=(player_path,)).start()
+        t.daemon = True
+
+
+class CustomProgressBar(QProgressBar):
+    def __init__(self, parent=None):
+        super(CustomProgressBar, self).__init__(parent)
+        self.restore()
+    def restore(self):
+        self.setTextVisible(False)
+        self.setValue(0)
+        self.setRange(0, 1)
+    def indeterminate(self):
+        self.setTextVisible(False)
+        self.setValue(0)
+        self.setRange(0, 0)
+    def start(self, maxValue):
+        self.setTextVisible(True)
+        self.setValue(0)
+        self.setRange(0, maxValue)
+    def progress(self, currentValue):
+        self.setTextVisible(True)
+        self.setValue(self.maximum())
+
+class MainWindow(QMainWindow, Ui_MainWindow):
+    def __init__(self, app, instance):
         super(MainWindow, self).__init__()
+        self.app = app
+        self.instance = instance
+        self.instance.load()
 
-        # TODO : see pickle module to dump object
-        self.settings = json.load(open('config.json'))
-
+        self.setupUi(self)
         self.initUI()
-
-    def saveSettings(self):
-        json.dump(self.settings, open('config.json', 'w'), indent=True)
 
     def initUI(self):
         self.initMenu()
         self.initTabs()
-
         self.setCentralWidget(self.tabWidget)
-
         self.setMinimumSize(600, 400)
-        self.statusBar().showMessage('Ready')
+        self.initStatusBar()
         self.setWindowTitle('ZTShows - Be simple')
         self.show()
 
-    def initMenu(self):
-        #exitAction = QtGui.QAction(QtGui.QIcon('exit.png'), '&Exit', self)
-        exitAction = QtGui.QAction('&Exit', self)
-        exitAction.setShortcut('Ctrl+Q')
-        exitAction.setStatusTip('Exit application')
-        exitAction.triggered.connect(QtGui.qApp.quit)
-        aboutAction = QtGui.QAction('&About', self)
-        aboutAction.setStatusTip('About ZTShows')
-        #settingsAction = QtGui.QAction('&Settings', self)
-        #aboutAction.setStatusTip('Configure things')
+    def initStatusBar(self):
+        self.progress = CustomProgressBar()
+        self.statusBar().showMessage('Ready')
+        self.statusBar().addPermanentWidget(self.progress)
 
-        menuBar = self.menuBar()
-        fileMenu = menuBar.addMenu("&File")
-        #fileMenu.addAction(settingsAction)
-        fileMenu.addAction(exitAction)
-        helpMenu = menuBar.addMenu("&Help")
-        helpMenu.addAction(aboutAction)
+    def initMenu(self):
+        def exit_now():
+            self.instance.unload()
+            app.quit()
+
+        self.actionExit.triggered.connect(exit_now)
+        self.actionSoftExit.triggered.connect(exit_now)
 
     def initTabs(self):
-        self.tabWidget = QtGui.QTabWidget(self)
+        self.searchSerieTabInit()
+        self.settingsTabInit()
 
-        searchSerieTab = self.searchSerieTab()
-        searchMovieTab = QtGui.QWidget()
-        downloadTab = QtGui.QWidget()
-        settingsTab = self.settingsTab()
+    def searchSerieTabInit(self):
+        def populateShows(shows):
+            self.resultList.clear()
+            for show in shows:
+                showRow = QTreeWidgetItem(self.resultList)
+                showRow.setText(0, show.SeriesName)
+                for season in show:
+                    seasonRow = QTreeWidgetItem(showRow)
+                    if season.season_number == 0:
+                        seasonRow.setText(0, 'Special')
+                    else:
+                        seasonRow.setText(0, 'Season {:02d}'.format(season.season_number))
+                    seasonRow.setData(0, Qt.UserRole + 1, season)
+                    showRow.addChild(seasonRow)
+                    for episode in season:
+                        episodeRow = QTreeWidgetItem(seasonRow)
+                        episodeRow.setText(0, '{:02d} - {}'.format(episode.EpisodeNumber, episode.EpisodeName))
+                        episodeRow.setData(0, Qt.UserRole + 1, episode)
+                        seasonRow.addChild(episodeRow)
+                self.resultList.addTopLevelItem(showRow)
+                if len(shows) == 1:
+                    self.resultList.expandItem(self.resultList.topLevelItem(0))
 
-        self.tabWidget.addTab(searchSerieTab, "Search Serie")
-        self.tabWidget.addTab(searchMovieTab, "Search Movie")
-        self.tabWidget.addTab(downloadTab, "Downloads")
-        self.tabWidget.addTab(settingsTab, "Settings")
+        def populateTorrents(item, torrents):
+            for torrent in torrents:
+                row = QTreeWidgetItem(item)
+                row.setText(0, '{} : {}'.format(torrent.title, torrent.seeders))
+                row.setData(0, Qt.UserRole + 1, torrent)
+                item.addChild(row)
 
+        def launchDownload(item):
+            torrent = item.data(0, Qt.UserRole + 1)
+            if not hasattr(torrent, 'title'):
+                return
+            self.instance.download(torrent)
 
-    def searchSerieTab(self):
+        def getShowsResults():
+            def searchDone(shows):
+                self.progress.restore()
+                populateShows(shows)
+            self.progress.indeterminate()
+            self.instance.search(self.searchField.text(), searchDone)
 
-        searchResult = SearchResult()
-        searchResult.setSelectionBehavior(QAbstractItemView.SelectRows)
+        def getTorrentsResults(item):
+            def searchDone(torrents):
+                self.progress.restore()
+                populateTorrents(item, torrents)
+            episode = item.data(0, Qt.UserRole + 1)
+            if not hasattr(episode, 'season'):
+                return
+            self.progress.indeterminate()
+            self.instance.search_episode(episode, searchDone)
 
-        searchField = QtGui.QLineEdit()
-        searchButton = QtGui.QPushButton("Search")
+        self.resultList.header().close()
+        self.searchField.returnPressed.connect(getShowsResults)
+        self.searchButton.clicked.connect(getShowsResults)
+        self.resultList.itemClicked.connect(getTorrentsResults)
+        self.resultList.itemDoubleClicked.connect(launchDownload)
 
-        def getResults():
-            searchResult.populate(tvdb.search(searchField.text(), 'en'))
-
-        searchField.returnPressed.connect(getResults)
-        searchButton.clicked.connect(getResults)
-
-        hbox = QtGui.QHBoxLayout()
-        hbox.addWidget(searchField)
-        hbox.addWidget(searchButton)
-
-        vbox = QtGui.QVBoxLayout()
-        vbox.addLayout(hbox)
-        vbox.addWidget(searchResult)
-
-        widget = QtGui.QWidget()
-        widget.setLayout(vbox)
-
-        return widget
-
-
-    def settingsTab(self):
-
-        def textItemWidget(text, settingKey, dataType):
+    def settingsTabInit(self):
+        def textItem(node, key, dataType):
             def update(value):
-                self.settings[settingKey] = dataType(value)
-                self.saveSettings()
+                self.instance.settings.set(key, dataType(value))
+            value = self.instance.settings.get(key)
+            if value is not None:
+                node.setText(str(value))
+            node.textChanged.connect(update)
 
-            labelField = QtGui.QLabel()
-            labelField.setText(text)
-            valueField = QtGui.QLineEdit()
-            if settingKey in self.settings:
-                valueField.setText(str(self.settings[settingKey]))
-            valueField.textChanged.connect(update)
-            hbox = QtGui.QHBoxLayout()
-            hbox.addWidget(labelField)
-            hbox.addWidget(valueField)
-            widget = QtGui.QWidget()
-            widget.setLayout(hbox)
-            return widget
-
-        def checkboxItemWidget(text, settingKey):
+        def numericItem(node, key):
             def update(value):
-                if value == QtCore.Qt.Checked:
-                    self.settings[settingKey] = True
-                else:
-                    self.settings[settingKey] = False
-                self.saveSettings()
+                self.instance.settings.set(key, float(value))
+            value = self.instance.settings.get(key)
+            if value is not None:
+                node.setValue(float(value))
+            node.valueChanged.connect(update)
 
-            labelField = QtGui.QLabel()
-            labelField.setText(text)
-            valueField = QtGui.QCheckBox()
-            if self.settings[settingKey] == True:
-                valueField.setCheckState(QtCore.Qt.Checked)
-            valueField.stateChanged.connect(update)
-            hbox = QtGui.QHBoxLayout()
-            hbox.addWidget(labelField)
-            hbox.addWidget(valueField)
-            widget = QtGui.QWidget()
-            widget.setLayout(hbox)
-            return widget
+        def checkItem(node, key):
+            def update(value):
+                value = True if Qt.Checked else False
+                self.instance.settings.set(key, value)
+            value = self.instance.settings.get(key)
+            if value is not None and value is True:
+                node.setCheckState(Qt.Checked)
+            node.stateChanged.connect(update)
 
-        vbox = QtGui.QVBoxLayout()
-        vbox.addWidget(textItemWidget("Command line ({video}, {subtitles})", "PLAYER_PATH", str))
-        vbox.addWidget(textItemWidget("Save path", "SAVE_PATH", str))
-        vbox.addWidget(textItemWidget("Default subtitle language", "SUBTITLE_LANGUAGE", str))
-        vbox.addWidget(textItemWidget("ThePirateBay url", "TPB_URL", str))
-        vbox.addWidget(textItemWidget("Download speed limit (kB/s)", "DOWNLOAD_SPEED_LIMIT", int))
-        vbox.addWidget(textItemWidget("Launch video when download reach X % (0 to disable)", "LAUNCH_VIDEO_PERCENT", float))
+        def comboItem(node, key):
+            def update(value):
+                self.instance.settings.set(key, str(value))
+            value = self.instance.settings.get(key)
+            if value is not None:
+                idx = node.findText(key)
+                if idx > -1:
+                    node.setCurrentIndex(idx)
+            node.currentIndexChanged.connect(update)
 
-        widget = QtGui.QWidget()
-        widget.setLayout(vbox)
-
-        return widget
-
-
-class SearchResult(QTreeView):
-    def __init__(self):
-        QTreeView.__init__(self)
-        self.model = QStandardItemModel()
-        self.model.setHorizontalHeaderLabels(['Results'])
-        self.setModel(self.model)
-        self.setIconSize(QSize(500, 500))
-        self.setUniformRowHeights(True)
-        self.setEditTriggers(QAbstractItemView.NoEditTriggers)
-
-        self.clicked.connect(self.populateTorrents)
-        self.doubleClicked.connect(self.launchDownload)
-
-    def populate(self, shows):
-        self.model.clear()
-        for show in shows:
-            showRow = QStandardItem('{}'.format(show.SeriesName))
-            showRow.setData(show)
-            dshowRow = QStandardItem('{}'.format(show.SeriesName))
-            for season in show:
-                if season.season_number == 0:
-                    seasonRow = QStandardItem("Special")
-                else:
-                    seasonRow = QStandardItem("Season {:02d}".format(season.season_number))
-                seasonRow.setData(season)
-                showRow.appendRow(seasonRow)
-                for episode in season:
-                    episodeRow = QStandardItem("{:02d} - {}".format(episode.EpisodeNumber, episode.EpisodeName))
-                    episodeRow.setData(episode)
-                    seasonRow.appendRow(episodeRow)
-            self.model.appendRow(showRow)
-        if len(shows) == 1:
-            self.expand(self.model.indexFromItem(showRow))
-
-    def populateTorrents(self, idx):
-        episode = idx.data(Qt.UserRole + 1)
-        if not hasattr(episode, 'season'):
-            return
-        search = tpb.search('{} S{:02d}E{:02d}'.format(episode.season.show.SeriesName, episode.season.season_number, episode.EpisodeNumber)).order(ORDERS.SEEDERS.DES)
-        for torrent in search:
-            child2 = QStandardItem("{} : {}".format(torrent.title, torrent.seeders))
-            child2.setData(torrent)
-            idx.model().itemFromIndex(idx).appendRow(child2)
-            #print("{} : {}".format(torrent.title, torrent.seeders))
-
-    def launchDownload(self, idx):
-        torrent = idx.data(Qt.UserRole + 1)
-        if not hasattr(torrent, 'title'):
-            return
-        Thread(target=magnetDownload, args=(torrent.magnet_link,)).start()
-#        magnetDownload(torrent.magnet_link)
-
-
-""""
-class DownloadProgressDialog(QtGui.QWidget):
-    def __init__(self):
-        super(Example, self).__init__()
-        self.initUI()
-
-    def initUI(self):      
-
-        self.pbar = QtGui.QProgressBar(self)
-        self.pbar.setGeometry(30, 40, 200, 25)
-
-        self.btn = QtGui.QPushButton('Start', self)
-        self.btn.move(40, 80)
-        self.btn.clicked.connect(self.doAction)
-
-        self.timer = QtCore.QBasicTimer()
-        self.step = 0
-        
-        self.setGeometry(300, 300, 280, 170)
-        self.setWindowTitle('QtGui.QProgressBar')
-        self.show()
-        
-    def timerEvent(self, e):
-      
-        if self.step >= 100:
-        
-            self.timer.stop()
-            self.btn.setText('Finished')
-            return
-            
-        self.step = self.step + 1
-        self.pbar.setValue(self.step)
-
-    def doAction(self):
-      
-        if self.timer.isActive():
-            self.timer.stop()
-            self.btn.setText('Start')
-            
-        else:
-            self.timer.start(100, self)
-            self.btn.setText('Stop')
-
-"""
+        textItem(self.launchCommandValue, "player_path", str)
+        textItem(self.savePathValue, "save_path", str)
+        comboItem(self.subtitlesLanguageValue, "subtitle_language")
+        textItem(self.tpbUrlValue, "tpb_url", str)
+        numericItem(self.speedLimitValue, "download_speed_limit")
+        numericItem(self.launchAfterValue, "launch_video_percent")
 
 if __name__ == '__main__':
-
-    app = QtGui.QApplication(sys.argv)
-    main = MainWindow()
+    app = QApplication(sys.argv)
+    ztshows = ZTShows()
+    window = MainWindow(app, ztshows)
+    window.show()
     sys.exit(app.exec_())

@@ -1,0 +1,6 @@
+download_speed_limit: 0.0
+launch_video_percent: 7.0
+player_path: vlc {video} --sub-file={subtitles}
+save_path: /tmp/
+subtitle_language: fre
+tpb_url: http://thepiratebay.gd
