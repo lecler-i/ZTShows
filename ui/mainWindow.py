@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# Form implementation generated from reading ui file 'mainWindow.ui'
+# Form implementation generated from reading ui file 'ui/mainWindow.ui'
 #
 # Created by: PyQt4 UI code generator 4.11.4
 #
@@ -41,6 +41,7 @@ class Ui_MainWindow(object):
         self.searchActionBar = QtGui.QHBoxLayout()
         self.searchActionBar.setObjectName(_fromUtf8("searchActionBar"))
         self.searchField = QtGui.QLineEdit(self.searchTab)
+        self.searchField.setText(_fromUtf8(""))
         self.searchField.setObjectName(_fromUtf8("searchField"))
         self.searchActionBar.addWidget(self.searchField)
         self.searchButton = QtGui.QPushButton(self.searchTab)
@@ -109,19 +110,25 @@ class Ui_MainWindow(object):
         self.formLayout.setWidget(3, QtGui.QFormLayout.FieldRole, self.tpbUrlValue)
         self.speedLimitLabel = QtGui.QLabel(self.settingsTab)
         self.speedLimitLabel.setObjectName(_fromUtf8("speedLimitLabel"))
-        self.formLayout.setWidget(4, QtGui.QFormLayout.LabelRole, self.speedLimitLabel)
+        self.formLayout.setWidget(5, QtGui.QFormLayout.LabelRole, self.speedLimitLabel)
         self.launchAfterLabel = QtGui.QLabel(self.settingsTab)
         self.launchAfterLabel.setObjectName(_fromUtf8("launchAfterLabel"))
-        self.formLayout.setWidget(5, QtGui.QFormLayout.LabelRole, self.launchAfterLabel)
+        self.formLayout.setWidget(6, QtGui.QFormLayout.LabelRole, self.launchAfterLabel)
         self.subtitlesLanguageValue = QtGui.QComboBox(self.settingsTab)
         self.subtitlesLanguageValue.setObjectName(_fromUtf8("subtitlesLanguageValue"))
         self.formLayout.setWidget(2, QtGui.QFormLayout.FieldRole, self.subtitlesLanguageValue)
         self.speedLimitValue = QtGui.QSpinBox(self.settingsTab)
         self.speedLimitValue.setObjectName(_fromUtf8("speedLimitValue"))
-        self.formLayout.setWidget(4, QtGui.QFormLayout.FieldRole, self.speedLimitValue)
+        self.formLayout.setWidget(5, QtGui.QFormLayout.FieldRole, self.speedLimitValue)
         self.launchAfterValue = QtGui.QDoubleSpinBox(self.settingsTab)
         self.launchAfterValue.setObjectName(_fromUtf8("launchAfterValue"))
-        self.formLayout.setWidget(5, QtGui.QFormLayout.FieldRole, self.launchAfterValue)
+        self.formLayout.setWidget(6, QtGui.QFormLayout.FieldRole, self.launchAfterValue)
+        self.label = QtGui.QLabel(self.settingsTab)
+        self.label.setObjectName(_fromUtf8("label"))
+        self.formLayout.setWidget(4, QtGui.QFormLayout.LabelRole, self.label)
+        self.tvdbApiKeyValue = QtGui.QLineEdit(self.settingsTab)
+        self.tvdbApiKeyValue.setObjectName(_fromUtf8("tvdbApiKeyValue"))
+        self.formLayout.setWidget(4, QtGui.QFormLayout.FieldRole, self.tvdbApiKeyValue)
         self.tabWidget.addTab(self.settingsTab, _fromUtf8(""))
         self.verticalLayout.addWidget(self.tabWidget)
         MainWindow.setCentralWidget(self.centralWidget)
@@ -161,7 +168,6 @@ class Ui_MainWindow(object):
     def retranslateUi(self, MainWindow):
         MainWindow.setWindowTitle(_translate("MainWindow", "MainWindow", None))
         self.searchButton.setText(_translate("MainWindow", "Search", None))
-        self.resultList.headerItem().setText(0, _translate("MainWindow", " ", None))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.searchTab), _translate("MainWindow", "Search", None))
         self.playButton.setText(_translate("MainWindow", "Play", None))
         self.pauseButton.setText(_translate("MainWindow", "Pause", None))
@@ -175,6 +181,7 @@ class Ui_MainWindow(object):
         self.tpbUrlLabel.setText(_translate("MainWindow", "The Pirate Bay URL (?)", None))
         self.speedLimitLabel.setText(_translate("MainWindow", "Default download speed limit (kB/s)", None))
         self.launchAfterLabel.setText(_translate("MainWindow", "Launch video after X % (?)", None))
+        self.label.setText(_translate("MainWindow", "TVDB API Key (?)", None))
         self.tabWidget.setTabText(self.tabWidget.indexOf(self.settingsTab), _translate("MainWindow", "Settings", None))
         self.menuFile.setTitle(_translate("MainWindow", "File", None))
         self.menuHelp.setTitle(_translate("MainWindow", "Help", None))

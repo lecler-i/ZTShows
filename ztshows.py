@@ -12,9 +12,8 @@ from PyQt4.QtCore import *
 from ui.mainWindow import Ui_MainWindow
 
 import libtorrent as lt
-from pytvdbapi import api
-from tpb import TPB
-from tpb import CATEGORIES, ORDERS
+from pytvdbapi import api as TVDB
+from tpb import TPB, CATEGORIES as TPB_CATEGORIES, ORDERS as TPB_ORDERS
 
 from threading import Thread
 from libs.progress import Progress
@@ -36,6 +35,9 @@ class DownloadManager:
         self.instance = instance
         self.session = lt.session()
         self.session.listen_on(6881, 6891)
+        self.session.add_dht_router("router.utorrent.com", 6881)
+        self.session.start_dht()
+
         self.torrents = {}
 
     def add_magnet(self, magnet, completion_callback = None, play_callback = None):
@@ -47,6 +49,9 @@ class DownloadManager:
             self.torrents[uid].handler.set_download_limit(download_speed_limit * 1000)
         Thread(target=self.download_worker, args=(self.torrents[uid], completion_callback, play_callback,)).start()
         return self.torrents[uid]
+
+    def get_torrents(self):
+        return self.session.get_torrents()
 
     def download_worker(self, torrent, completion_callback = None, play_callback = None):
         while (not torrent.handler.has_metadata()):
@@ -70,10 +75,12 @@ class DownloadManager:
                 status.progress >= launch_at / 100 and
                 status.state in [3, 4, 5]):
                 if play_callback:
-                    play_callback()
+                    play_callback(torrent)
                 launched = True
             time.sleep(1)
         torrent.update(progress=100)
+        if completion_callback:
+            completion_callback(torrent)
 
 class Settings:
     class SettingsException(Exception):
@@ -90,7 +97,8 @@ class Settings:
     def get(self, key):
         if self.store is None:
             self.store = {}
-        return self.store[key]
+        try: return self.store[key]
+        except: return None
     def set(self, key, value):
         if self.store is None:
             self.store = {}
@@ -101,13 +109,13 @@ class ZTShows:
         self.settings = Settings('config.yml')
         self.download_manager = DownloadManager(self)
 
+    def load(self):
+        self.settings.load()
+
         tpb_base_url = self.settings.get('tpb_base_url')
         self.api_tpb = TPB('https://thepiratebay.se' if not tpb_base_url else tpb_base_url)
         tvdb_api_key = self.settings.get('tvdb_api_key')
-        self.api_tvdb = TVDB('81DD35DB106172E7' if not tvdb_api_key else tvdb_api_key)
-
-    def load(self):
-        self.settings.load()
+        self.api_tvdb = TVDB.TVDB('81DD35DB106172E7' if not tvdb_api_key else tvdb_api_key)
 
     def unload(self):
         self.settings.save()
@@ -116,29 +124,26 @@ class ZTShows:
         def work(callback):
             callback(self.api_tvdb.search(query, 'en'))
         Thread(target=work, args=(callback,)).start()
+        print(self.download_manager.get_torrents())
 
     def search_episode(self, episode, callback):
         def work(callback):
-            results = self.api_tpb.search(query).order(ORDERS.SEEDERS.DES)
+            results = self.api_tpb.search(query).order(TPB_ORDERS.SEEDERS.DES)
             callback(results)
         query = '{} s{:02d}e{:02d}'.format(episode.season.show.SeriesName,
                                            episode.season.season_number,
                                            episode.EpisodeNumber)
         Thread(target=work, args=(callback,)).start()
 
-    def download(self, torrent):
-        t = self.download_manager.add_magnet(torrent.magnet_link)
-        while (True):
-            time.sleep(1)
-            print(t.data)
+    def download(self, torrent, completion_callback = None, play_callback = None):
+        self.download_manager.add_magnet(torrent.magnet_link, completion_callback, play_callback)
 
-    def open_player(h):
+    def open_player(torrent):
         def work(player_path):
             os.system(player_path)
-        player_path = self.settings.get('player_path').format(video='"' + self.settings.get('save_path') + torrent.name() + '"', subtitles='')
+        player_path = self.settings.get('player_path').format(video='"' + self.settings.get('save_path') + torrent.handler.name() + '"', subtitles='')
         t = Thread(target=work, args=(player_path,)).start()
         t.daemon = True
-
 
 class CustomProgressBar(QProgressBar):
     def __init__(self, parent=None):
@@ -226,11 +231,12 @@ class MainWindow(QMainWindow, Ui_MainWindow):
                 row.setData(0, Qt.UserRole + 1, torrent)
                 item.addChild(row)
 
-        def launchDownload(item):
+        def launchDownload(item, completion_callback = None, play_callback = None):
             torrent = item.data(0, Qt.UserRole + 1)
             if not hasattr(torrent, 'title'):
                 return
-            self.instance.download(torrent)
+            print('[INFO] Starting downloading')
+            self.instance.download(torrent, completion_callback, play_callback)
 
         def getShowsResults():
             def searchDone(shows):
@@ -243,17 +249,54 @@ class MainWindow(QMainWindow, Ui_MainWindow):
             def searchDone(torrents):
                 self.progress.restore()
                 populateTorrents(item, torrents)
+                self.resultList.expandItem(item)
             episode = item.data(0, Qt.UserRole + 1)
             if not hasattr(episode, 'season'):
                 return
             self.progress.indeterminate()
             self.instance.search_episode(episode, searchDone)
 
-        self.resultList.header().close()
+        def openMenu(position):
+            def triggerPlay():
+                item = self.resultList.selectedItems()[0]
+                launchDownload(item, None, self.instance.open_player)
+            def triggerDownload():
+                item = self.resultList.selectedItems()[0]
+                launchDownload(item, None, None)
+            def triggerLoad():
+                item = self.resultList.selectedItems()[0]
+                getTorrentsResults(item)
+            indexes = self.resultList.selectedIndexes()
+            if len(indexes) > 0:
+                level = 0
+                index = indexes[0]
+                while index.parent().isValid():
+                    index = index.parent()
+                    level += 1
+            menu = QMenu()
+            if level == 2:
+                loadAction = QAction("Load torrents", self)
+                loadAction.triggered.connect(triggerLoad)
+                menu.addAction(loadAction)
+            if level == 3:
+                playAction = QAction("Play", self)
+                playAction.triggered.connect(triggerPlay)
+                menu.addAction(playAction)
+                downloadAction = QAction("Download", self)
+                downloadAction.triggered.connect(triggerDownload)
+                menu.addAction(downloadAction)
+            menu.exec_(self.resultList.viewport().mapToGlobal(position))
+
         self.searchField.returnPressed.connect(getShowsResults)
+        QTimer.singleShot(0, self.searchField.setFocus)
+
         self.searchButton.clicked.connect(getShowsResults)
+
+        self.resultList.header().close()
         self.resultList.itemClicked.connect(getTorrentsResults)
         self.resultList.itemDoubleClicked.connect(launchDownload)
+        self.resultList.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.resultList.customContextMenuRequested.connect(openMenu)
 
     def settingsTabInit(self):
         def textItem(node, key, dataType):
@@ -294,7 +337,8 @@ class MainWindow(QMainWindow, Ui_MainWindow):
         textItem(self.launchCommandValue, "player_path", str)
         textItem(self.savePathValue, "save_path", str)
         comboItem(self.subtitlesLanguageValue, "subtitle_language")
-        textItem(self.tpbUrlValue, "tpb_url", str)
+        textItem(self.tpbUrlValue, "tpb_base_url", str)
+        textItem(self.tvdbApiKeyValue, "tvdb_api_key", str)
         numericItem(self.speedLimitValue, "download_speed_limit")
         numericItem(self.launchAfterValue, "launch_video_percent")
 

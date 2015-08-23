@@ -3,4 +3,5 @@ launch_video_percent: 7.0
 player_path: vlc {video} --sub-file={subtitles}
 save_path: /tmp/
 subtitle_language: fre
-tpb_url: http://thepiratebay.gd
+tpb_base_url: https://thepiratebay.gd
+tvdb_api_key: 81DD35DB106172E7

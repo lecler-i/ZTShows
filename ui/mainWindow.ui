@@ -30,7 +30,11 @@
           <item>
            <layout class="QHBoxLayout" name="searchActionBar">
             <item>
-             <widget class="QLineEdit" name="searchField"/>
+             <widget class="QLineEdit" name="searchField">
+              <property name="text">
+               <string/>
+              </property>
+             </widget>
             </item>
             <item>
              <widget class="QPushButton" name="searchButton">
@@ -45,7 +49,7 @@
            <widget class="QTreeWidget" name="resultList">
             <column>
              <property name="text">
-              <string> </string>
+              <string/>
              </property>
             </column>
            </widget>
@@ -152,14 +156,14 @@
         <item row="3" column="1">
          <widget class="QLineEdit" name="tpbUrlValue"/>
         </item>
-        <item row="4" column="0">
+        <item row="5" column="0">
          <widget class="QLabel" name="speedLimitLabel">
           <property name="text">
            <string>Default download speed limit (kB/s)</string>
           </property>
          </widget>
         </item>
-        <item row="5" column="0">
+        <item row="6" column="0">
          <widget class="QLabel" name="launchAfterLabel">
           <property name="text">
            <string>Launch video after X % (?)</string>
@@ -169,11 +173,21 @@
         <item row="2" column="1">
          <widget class="QComboBox" name="subtitlesLanguageValue"/>
         </item>
-        <item row="4" column="1">
+        <item row="5" column="1">
          <widget class="QSpinBox" name="speedLimitValue"/>
         </item>
-        <item row="5" column="1">
+        <item row="6" column="1">
          <widget class="QDoubleSpinBox" name="launchAfterValue"/>
+        </item>
+        <item row="4" column="0">
+         <widget class="QLabel" name="label">
+          <property name="text">
+           <string>TVDB API Key (?)</string>
+          </property>
+         </widget>
+        </item>
+        <item row="4" column="1">
+         <widget class="QLineEdit" name="tvdbApiKeyValue"/>
         </item>
        </layout>
       </widget>
